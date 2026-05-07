@@ -1,0 +1,10 @@
+{
+  "name": "TryGC OS Handover Tool",
+  "short_name": "TryGC OS",
+  "description": "Premium TryGC handover, escalation and connected users workspace.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F7F3FB",
+  "theme_color": "#E8630C",
+  "icons": []
+}

@@ -1,0 +1,39 @@
+{
+  "name": "trygc-premium-handover-tool",
+  "version": "3.0.0",
+  "private": true,
+  "description": "TryGC OS premium static handover and team connection workspace.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "test": "vitest run --config vitest.config.ts",
+    "deploy": "vercel deploy --prod"
+  },
+  "engines": {
+    "node": "24.x"
+  },
+  "keywords": [
+    "trygc",
+    "handover",
+    "operations",
+    "dashboard",
+    "vercel"
+  ],
+  "license": "UNLICENSED",
+  "dependencies": {
+    "next": "^16.2.5",
+    "postcss": "^8.5.14",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6"
+  },
+  "overrides": {
+    "postcss": "^8.5.14"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "@types/react": "19.2.14",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.5"
+  }
+}
