@@ -4,7 +4,7 @@
   "description": "Premium TryGC handover, escalation and connected users workspace.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#F7F3FB",
-  "theme_color": "#E8630C",
+  "background_color": "#faf9fd",
+  "theme_color": "#E9640D",
   "icons": []
 }
