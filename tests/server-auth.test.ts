@@ -11,6 +11,7 @@ import {
   verifyPassword,
 } from "../src/server/auth";
 import {
+  buildPostgresPoolConfig,
   createUser,
   deleteUser,
   getVisibleState,
@@ -49,6 +50,20 @@ describe("password and session helpers", () => {
     const [body, signature] = cookie.split(".");
     const tamperedBody = `${body.slice(0, -1)}${body.endsWith("a") ? "b" : "a"}`;
     expect(parseSessionCookie(`${tamperedBody}.${signature}`, secret)).toBeNull();
+  });
+});
+
+describe("postgres connection config", () => {
+  it("strips sslmode from Supabase URLs and disables certificate chain rejection", () => {
+    const config = buildPostgresPoolConfig(
+      "postgres://user:pass@aws-1-us-east-1.pooler.supabase.com:6543/postgres?sslmode=require&supa=base-pooler.x",
+    );
+
+    expect(config.connectionString).toBe(
+      "postgres://user:pass@aws-1-us-east-1.pooler.supabase.com:6543/postgres?supa=base-pooler.x",
+    );
+    expect(config.ssl).toEqual({ rejectUnauthorized: false });
+    expect(config.connectionTimeoutMillis).toBe(8000);
   });
 });
 

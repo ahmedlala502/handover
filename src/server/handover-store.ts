@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import { Pool } from "pg";
+import { Pool, type PoolConfig } from "pg";
 
 import { createPasswordHash, verifyPassword } from "./auth";
 
@@ -791,16 +791,36 @@ async function ensurePostgresSchema() {
 
 function getPostgresPool() {
   if (!postgresPool) {
-    postgresPool = new Pool({
-      connectionString: process.env.POSTGRES_URL || process.env.POSTGRES_PRISMA_URL,
-      max: 3,
-      connectionTimeoutMillis: 8000,
-      idleTimeoutMillis: 10000,
-      ssl: { rejectUnauthorized: false },
-    });
+    postgresPool = new Pool(buildPostgresPoolConfig(process.env.POSTGRES_URL || process.env.POSTGRES_PRISMA_URL));
   }
 
   return postgresPool;
+}
+
+export function buildPostgresPoolConfig(connectionString: string | undefined): PoolConfig {
+  if (!connectionString) {
+    throw new Error("POSTGRES_URL is not configured.");
+  }
+
+  return {
+    connectionString: stripPgSslParams(connectionString),
+    max: 3,
+    connectionTimeoutMillis: 8000,
+    idleTimeoutMillis: 10000,
+    ssl: { rejectUnauthorized: false },
+  };
+}
+
+function stripPgSslParams(connectionString: string) {
+  try {
+    const url = new URL(connectionString);
+    for (const param of ["sslmode", "sslcert", "sslkey", "sslrootcert"]) {
+      url.searchParams.delete(param);
+    }
+    return url.toString();
+  } catch {
+    return connectionString;
+  }
 }
 
 function uid(prefix: string) {
