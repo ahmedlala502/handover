@@ -794,6 +794,8 @@ function getPostgresPool() {
     postgresPool = new Pool({
       connectionString: process.env.POSTGRES_URL || process.env.POSTGRES_PRISMA_URL,
       max: 3,
+      connectionTimeoutMillis: 8000,
+      idleTimeoutMillis: 10000,
       ssl: { rejectUnauthorized: false },
     });
   }
