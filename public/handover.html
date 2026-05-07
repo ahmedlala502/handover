@@ -67,8 +67,14 @@
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;overflow:hidden}
 body{font-family:var(--font);background:radial-gradient(circle at top left,rgba(232,99,12,.13),transparent 30%),radial-gradient(circle at top right,rgba(82,53,140,.18),transparent 35%),var(--bg);color:var(--text);font-size:14px}
+[hidden]{display:none!important}
 button,input,select,textarea{font:inherit}
 button{cursor:pointer}
+.auth-screen{height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at top left,rgba(232,99,12,.16),transparent 34%),var(--bg)}
+.auth-panel{width:min(440px,100%);background:linear-gradient(180deg,var(--card),var(--card-2));border:1px solid var(--line);border-radius:24px;box-shadow:var(--shadow);padding:24px}
+.auth-panel h1{font-size:24px;letter-spacing:-.03em;margin-top:16px}
+.auth-panel p{color:var(--muted);font-weight:650;line-height:1.55;margin-top:8px}
+.auth-error{margin-top:12px;color:var(--danger);font-weight:850;min-height:18px}
 .app{height:100vh;display:grid;grid-template-columns:286px 1fr;overflow:hidden}
 .sidebar{height:100%;background:linear-gradient(180deg,var(--card),var(--card-2));border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden;position:relative}
 .sidebar:before{content:"";position:absolute;width:220px;height:220px;right:-92px;top:-70px;border-radius:50%;background:radial-gradient(circle,rgba(232,99,12,.16),transparent 70%)}
@@ -175,7 +181,25 @@ textarea{min-height:110px;resize:vertical;line-height:1.5}.form-grid{display:gri
 </style>
 </head>
 <body>
-<div class="app">
+<section class="auth-screen" id="authScreen">
+  <form class="auth-panel" id="loginForm">
+    <div class="brand-mark" aria-label="TryGC mark">
+      <svg viewBox="0 0 48 48" fill="none" aria-hidden="true">
+        <circle cx="20" cy="18" r="11" stroke="white" stroke-width="5" opacity=".98"/>
+        <circle cx="20" cy="18" r="5" fill="white"/>
+        <circle cx="31" cy="9" r="4" fill="white" opacity=".92"/>
+        <path d="M10 32c0 7 5 11 12 11 6 0 11-3 14-8" stroke="white" stroke-width="5" stroke-linecap="round"/>
+      </svg>
+    </div>
+    <h1>TryGC OS</h1>
+    <p>Sign in to view your assigned handovers, send updates, and manage access if you are an admin.</p>
+    <div class="field" style="margin-top:18px"><label>Username</label><input id="loginUser" autocomplete="username" required></div>
+    <div class="field" style="margin-top:12px"><label>Password</label><input id="loginPassword" type="password" autocomplete="current-password" required></div>
+    <div class="auth-error" id="loginError"></div>
+    <button class="btn primary" type="submit" style="width:100%;justify-content:center;margin-top:12px">Sign in</button>
+  </form>
+</section>
+<div class="app" id="appShell" hidden>
   <aside class="sidebar">
     <div class="brand">
       <div class="brand-mark" aria-label="TryGC mark">
@@ -208,6 +232,7 @@ textarea{min-height:110px;resize:vertical;line-height:1.5}.form-grid{display:gri
         <button class="btn" onclick="document.getElementById('importFile').click()">⇧ Import</button>
         <input id="importFile" type="file" accept="application/json" class="hidden" />
         <button class="btn primary" onclick="openHandoverForm()">＋ New Handover</button>
+        <button class="btn ghost" onclick="logout()">Sign out</button>
       </div>
     </header>
     <section class="content" id="content"></section>
@@ -219,7 +244,7 @@ textarea{min-height:110px;resize:vertical;line-height:1.5}.form-grid{display:gri
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script>
 'use strict';
-const STORE_KEY = 'trygc_os_premium_v2';
+const STORE_KEY = 'trygc_os_premium_v3';
 const OLD_KEY = 'trygc_handover_v1';
 const TODAY = () => new Date().toISOString().slice(0,10);
 const uid = (p='id') => `${p}_${Math.random().toString(36).slice(2,8)}_${Date.now().toString(36).slice(-5)}`;
@@ -264,7 +289,38 @@ let route = 'command';
 let draft = null;
 let editingId = null;
 let filters = {q:'', status:'', priority:'', market:'', team:'', assignee:''};
-let state = loadState();
+let state = null;
+let sessionUser = null;
+let previewUserId = '';
+function isAdmin(){ return state?.sessionAccessRole === 'admin'; }
+async function api(path, options={}){
+  const res = await fetch(path, {
+    credentials:'same-origin',
+    headers:{'Content-Type':'application/json', ...(options.headers||{})},
+    ...options
+  });
+  const text = await res.text();
+  const data = text ? JSON.parse(text) : null;
+  if(!res.ok) throw new Error(data?.error || 'Request failed');
+  return data;
+}
+async function login(event){
+  event.preventDefault();
+  $('#loginError').textContent='';
+  try{
+    const data = await api('/api/auth/login',{method:'POST',body:JSON.stringify({username:$('#loginUser').value.trim(),password:$('#loginPassword').value})});
+    sessionUser=data.user;
+    await loadStateFromServer();
+    showApp();
+    render();
+  }catch(err){ $('#loginError').textContent=err.message || 'Unable to sign in'; }
+}
+async function logout(){
+  await api('/api/auth/logout',{method:'POST'}).catch(()=>null);
+  sessionUser=null; state=null; previewUserId='';
+  $('#appShell').hidden=true; $('#authScreen').hidden=false;
+}
+function showApp(){ $('#authScreen').hidden=true; $('#appShell').hidden=false; }
 function seedState(){
   const now = new Date();
   const users = [
@@ -299,20 +355,15 @@ function seedState(){
     settings:{ackSlaMins:30,urgentSlaHrs:2,highSlaHrs:8,mediumSlaHrs:24,lowSlaHrs:48,autoEscalateHigh:true}
   };
 }
-function loadState(){
-  try{
-    const raw = localStorage.getItem(STORE_KEY);
-    if(raw){ const parsed = JSON.parse(raw); return normalizeState(parsed); }
-    const oldRaw = localStorage.getItem(OLD_KEY);
-    if(oldRaw){ return migrateOld(JSON.parse(oldRaw)); }
-  }catch(err){ console.warn('State load failed',err); }
-  const seeded = seedState();
-  localStorage.setItem(STORE_KEY,JSON.stringify(seeded));
-  return seeded;
+async function loadStateFromServer(nextPreviewUserId=''){
+  const qs = nextPreviewUserId ? `?previewUserId=${encodeURIComponent(nextPreviewUserId)}` : '';
+  state = normalizeState(await api(`/api/app/state${qs}`));
+  previewUserId = state.previewingAsUserId || '';
+  return state;
 }
 function normalizeState(s){
   const seeded = seedState();
-  s.version = 2;
+  s.version = 3;
   s.teams = Array.isArray(s.teams) && s.teams.length ? s.teams : seeded.teams;
   s.markets = Array.isArray(s.markets) && s.markets.length ? s.markets : seeded.markets;
   s.users = Array.isArray(s.users) && s.users.length ? s.users : seeded.users;
@@ -333,7 +384,13 @@ function migrateOld(old){
   saveState(s);
   return s;
 }
-function saveState(next=state){ try{ localStorage.setItem(STORE_KEY,JSON.stringify(next)); return true; }catch(err){ console.error('TryGC OS save failed',err); return false; } }
+async function saveState(next=state){
+  try{
+    const qs = previewUserId ? `?previewUserId=${encodeURIComponent(previewUserId)}` : '';
+    await api(`/api/app/state${qs}`,{method:'PUT',body:JSON.stringify(next)});
+    return true;
+  }catch(err){ console.error('TryGC OS save failed',err); toast(err.message || 'Save failed'); return false; }
+}
 function activeUser(){ return state.users.find(u=>u.id===state.activeUserId) || state.users[0]; }
 function userById(id){ return state.users.find(u=>u.id===id) || null; }
 function userName(id){ const u=userById(id); return u ? u.name : 'Unassigned'; }
@@ -385,16 +442,24 @@ function navBadge(id){
 }
 function renderProfileMini(){
   const u=activeUser();
+  const previewControls = isAdmin() ? `
+    <select class="profile-select" onchange="switchUser(this.value)">
+      <option value="">Admin view · all handovers</option>
+      ${state.users.map(x=>`<option value="${x.id}" ${previewUserId===x.id?'selected':''}>Preview ${esc(x.name)} · ${esc(x.market)}</option>`).join('')}
+    </select>` : '';
   $('#profileMini').innerHTML = `
     <div class="profile-top">
       <div class="avatar">${esc(initials(u.name))}</div>
-      <div><div class="mini-name">${esc(u.name)}</div><div class="mini-role">${esc(u.role)}</div></div>
+      <div><div class="mini-name">${esc(u.name)}</div><div class="mini-role">${esc(u.role)} · ${esc(u.accessRole||'user')}</div></div>
     </div>
-    <select class="profile-select" onchange="switchUser(this.value)">
-      ${state.users.map(x=>`<option value="${x.id}" ${x.id===u.id?'selected':''}>${esc(x.name)} · ${esc(x.market)}</option>`).join('')}
-    </select>`;
+    ${previewControls}`;
 }
-function switchUser(id){ state.activeUserId=id; saveState(); addActivity('◉','Profile switched',`${userName(id)} is now the active workspace profile.`,id); render(); toast(`Active profile: ${userName(id)}`); }
+async function switchUser(id){
+  if(!isAdmin()) return toast('Only admins can preview other users');
+  await loadStateFromServer(id);
+  render();
+  toast(id ? `Previewing ${userName(id)}` : 'Admin view');
+}
 function wireAfterRender(){
   if(route==='handovers' || route==='inbox'){
     ['q','status','priority','market','team','assignee'].forEach(k=>{ const el=$(`#f_${k}`); if(el) el.addEventListener('input',()=>{ filters[k]=el.value; render(); }); });
@@ -559,9 +624,9 @@ function viewPeople(){
     const assigned=state.handovers.filter(h=>h.toUser===u.id && h.status!=='closed').length;
     const sent=state.handovers.filter(h=>h.fromUser===u.id && h.status!=='closed').length;
     const escCount=state.escalations.filter(e=>e.owner===u.id && e.status!=='resolved').length;
-    return `<tr><td><div class="name-cell"><div class="avatar">${esc(initials(u.name))}</div><div><div class="strong">${esc(u.name)}</div><div class="small-muted">${esc(u.email||'No email')}</div></div></div></td><td>${esc(u.role)}</td><td>${esc(u.team)}</td><td>${marketPill(u.market)}</td><td>${statusDot(u.status)}</td><td><span class="mono">${assigned}</span> assigned<br><span class="small-muted">${sent} sent</span></td><td>${escCount?`<span class="pill red">${escCount} open</span>`:`<span class="pill green">clear</span>`}</td><td><button class="btn sm" onclick="openUserModal('${u.id}')">Edit</button></td></tr>`;
+    return `<tr><td><div class="name-cell"><div class="avatar">${esc(initials(u.name))}</div><div><div class="strong">${esc(u.name)}</div><div class="small-muted">${esc(u.email||'No email')}</div></div></div></td><td>${esc(u.role)}</td><td>${esc(u.team)}</td><td>${marketPill(u.market)}</td><td>${statusDot(u.status)}</td><td><span class="mono">${assigned}</span> assigned<br><span class="small-muted">${sent} sent</span></td><td>${escCount?`<span class="pill red">${escCount} open</span>`:`<span class="pill green">clear</span>`}</td><td>${isAdmin()?`<button class="btn sm" onclick="openUserModal('${u.id}')">Edit</button>`:''}</td></tr>`;
   }).join('');
-  return `<div class="section-head"><div><div class="section-title">User profiles</div><div class="section-sub">Each person has role, team, market, shift, connection status, and workload.</div></div><button class="btn primary" onclick="openUserModal()">＋ Add profile</button></div><div class="grid g5" style="margin-bottom:16px">${state.users.map(userCard).join('')}</div><div class="card no-pad"><div class="table-wrap"><table><thead><tr><th>User</th><th>Role</th><th>Team</th><th>Market</th><th>Status</th><th>Workload</th><th>Escalations</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+  return `<div class="section-head"><div><div class="section-title">User profiles</div><div class="section-sub">Each person has role, team, market, shift, connection status, and workload.</div></div>${isAdmin()?`<button class="btn primary" onclick="openUserModal()">＋ Add profile</button>`:''}</div><div class="grid g5" style="margin-bottom:16px">${state.users.map(userCard).join('')}</div><div class="card no-pad"><div class="table-wrap"><table><thead><tr><th>User</th><th>Role</th><th>Team</th><th>Market</th><th>Status</th><th>Workload</th><th>Escalations</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 function viewEscalations(){
   const open=state.escalations.filter(e=>e.status!=='resolved').sort((a,b)=>severityRank(a)-severityRank(b) || new Date(a.raisedAt)-new Date(b.raisedAt));
@@ -587,8 +652,14 @@ function barList(obj){
   return `<div style="display:grid;gap:14px;margin-top:16px">${entries.map(([k,v])=>`<div><div style="display:flex;justify-content:space-between;margin-bottom:7px"><span class="strong">${esc(k)}</span><span class="mono">${v}</span></div><div class="progress"><span style="width:${Math.round(v/max*100)}%"></span></div></div>`).join('')}</div>`;
 }
 function avgTasks(){ if(!state.handovers.length) return '0.0'; const n=state.handovers.reduce((s,h)=>s+(h.tasks||[]).length,0)/state.handovers.length; return n.toFixed(1); }
+function authSettingsPanel(){
+  if(!isAdmin()){
+    return `<div class="card"><div class="section-title">Account access</div><p class="section-sub" style="margin-top:12px;line-height:1.65">Your account is managed by an admin. You can only see handovers where you are directly involved.</p></div>`;
+  }
+  return `<div class="card no-pad"><div style="padding:18px" class="section-head"><div><div class="section-title">Auth backend</div><div class="section-sub">Create users, update profile details, change passwords, and assign access roles.</div></div><button class="btn primary" onclick="openUserModal()">＋ Add user</button></div><div class="table-wrap"><table><thead><tr><th>User</th><th>Username</th><th>Access</th><th>Team</th><th>Market</th><th>Status</th><th></th></tr></thead><tbody>${state.users.map(u=>`<tr><td><div class="name-cell"><div class="avatar">${esc(initials(u.name))}</div><div><div class="strong">${esc(u.name)}</div><div class="small-muted">${esc(u.email||'No email')}</div></div></div></td><td class="mono">${esc(u.username||'')}</td><td><span class="pill ${u.accessRole==='admin'?'red':'gray'}">${esc(u.accessRole||'user')}</span></td><td>${esc(u.team)}</td><td>${marketPill(u.market)}</td><td>${statusDot(u.status)}</td><td><div class="split"><button class="btn sm" onclick="switchUser('${u.id}')">Preview</button><button class="btn sm" onclick="openUserModal('${u.id}')">Edit</button></div></td></tr>`).join('')}</tbody></table></div></div>`;
+}
 function viewSettings(){
-  return `<div class="grid g2"><div class="card"><div class="section-title">SLA rules</div><div class="form-grid fg2" style="margin-top:16px"><div class="field"><label>Ack SLA / mins</label><input type="number" id="s_ack" value="${state.settings.ackSlaMins}"></div><div class="field"><label>Urgent SLA / hrs</label><input type="number" id="s_urg" value="${state.settings.urgentSlaHrs}"></div><div class="field"><label>High SLA / hrs</label><input type="number" id="s_high" value="${state.settings.highSlaHrs}"></div><div class="field"><label>Medium SLA / hrs</label><input type="number" id="s_med" value="${state.settings.mediumSlaHrs}"></div><div class="field"><label>Low SLA / hrs</label><input type="number" id="s_low" value="${state.settings.lowSlaHrs}"></div><div class="field"><label>Auto escalate high blockers</label><select id="s_auto"><option value="true" ${state.settings.autoEscalateHigh?'selected':''}>Enabled</option><option value="false" ${!state.settings.autoEscalateHigh?'selected':''}>Disabled</option></select></div></div><button class="btn primary" style="margin-top:14px" onclick="saveSettings()">Save SLA Settings</button></div><div class="card"><div class="section-title">Data controls</div><p class="section-sub" style="margin-top:12px;line-height:1.65">This single-file tool stores profiles, handovers, and escalations in your browser local storage. Use Backup/Import to move data between devices. For real multi-user live sync, connect this UI to Supabase/Firebase later.</p><div class="split" style="margin-top:16px"><button class="btn" onclick="exportJSON()">Download Backup</button><button class="btn danger" onclick="resetDemo()">Reset demo data</button></div></div></div><div class="section-head" style="margin-top:18px"><div><div class="section-title">Teams and markets</div><div class="section-sub">Available dropdown values used across handovers and profiles.</div></div></div><div class="grid g2"><div class="card"><div class="section-title">Teams</div><div class="split" style="margin-top:14px">${state.teams.map(t=>`<span class="pill purple">${esc(t)}</span>`).join('')}</div><div class="split" style="margin-top:14px"><input id="newTeam" placeholder="Add team"><button class="btn sm" onclick="addTeam()">Add</button></div></div><div class="card"><div class="section-title">Markets</div><div class="split" style="margin-top:14px">${state.markets.map(m=>`<span class="pill orange">${esc(m.code)} · ${esc(m.ccy)}</span>`).join('')}</div><div class="split" style="margin-top:14px"><input id="newMarket" placeholder="Code, Name, CCY e.g. JO, Jordan, JOD"><button class="btn sm" onclick="addMarket()">Add</button></div></div></div>`;
+  return `${authSettingsPanel()}<div class="grid g2" style="margin-top:18px"><div class="card"><div class="section-title">SLA rules</div><div class="form-grid fg2" style="margin-top:16px"><div class="field"><label>Ack SLA / mins</label><input type="number" id="s_ack" value="${state.settings.ackSlaMins}"></div><div class="field"><label>Urgent SLA / hrs</label><input type="number" id="s_urg" value="${state.settings.urgentSlaHrs}"></div><div class="field"><label>High SLA / hrs</label><input type="number" id="s_high" value="${state.settings.highSlaHrs}"></div><div class="field"><label>Medium SLA / hrs</label><input type="number" id="s_med" value="${state.settings.mediumSlaHrs}"></div><div class="field"><label>Low SLA / hrs</label><input type="number" id="s_low" value="${state.settings.lowSlaHrs}"></div><div class="field"><label>Auto escalate high blockers</label><select id="s_auto"><option value="true" ${state.settings.autoEscalateHigh?'selected':''}>Enabled</option><option value="false" ${!state.settings.autoEscalateHigh?'selected':''}>Disabled</option></select></div></div><button class="btn primary" style="margin-top:14px" onclick="saveSettings()">Save SLA Settings</button></div><div class="card"><div class="section-title">Data controls</div><p class="section-sub" style="margin-top:12px;line-height:1.65">Operational data is stored on the backend. If Postgres env vars are configured, the backend uses Supabase Postgres; otherwise it uses a local JSON file for development.</p><div class="split" style="margin-top:16px"><button class="btn" onclick="exportJSON()">Download Backup</button><button class="btn danger" onclick="resetDemo()">Reset demo data</button></div></div></div><div class="section-head" style="margin-top:18px"><div><div class="section-title">Teams and markets</div><div class="section-sub">Available dropdown values used across handovers and profiles.</div></div></div><div class="grid g2"><div class="card"><div class="section-title">Teams</div><div class="split" style="margin-top:14px">${state.teams.map(t=>`<span class="pill purple">${esc(t)}</span>`).join('')}</div><div class="split" style="margin-top:14px"><input id="newTeam" placeholder="Add team"><button class="btn sm" onclick="addTeam()">Add</button></div></div><div class="card"><div class="section-title">Markets</div><div class="split" style="margin-top:14px">${state.markets.map(m=>`<span class="pill orange">${esc(m.code)} · ${esc(m.ccy)}</span>`).join('')}</div><div class="split" style="margin-top:14px"><input id="newMarket" placeholder="Code, Name, CCY e.g. JO, Jordan, JOD"><button class="btn sm" onclick="addMarket()">Add</button></div></div></div>`;
 }
 function saveSettings(){
   state.settings.ackSlaMins=Number($('#s_ack').value)||30;
@@ -658,17 +729,32 @@ function openHandoverDetail(id){
 function ackHandover(id){ const h=state.handovers.find(x=>x.id===id); if(!h) return; h.status='acknowledged'; h.ackAt=new Date().toISOString(); h.ackBy=state.activeUserId; h.updatedAt=new Date().toISOString(); notify(h.fromUser,'Handover acknowledged',h.title,'handover',h.id); addActivity('◎','Handover acknowledged',`${h.title} acknowledged by ${userName(state.activeUserId)}.`,state.activeUserId); saveState(); closeDrawer(); render(); toast('Acknowledged'); }
 function closeHandover(id){ const h=state.handovers.find(x=>x.id===id); if(!h) return; h.status='closed'; h.closedAt=new Date().toISOString(); h.updatedAt=new Date().toISOString(); addActivity('✓','Handover closed',`${h.title} closed by ${userName(state.activeUserId)}.`,state.activeUserId); saveState(); closeDrawer(); render(); toast('Handover closed'); }
 function openUserModal(id=''){
+  if(!isAdmin()) return toast('Admin access required');
   const u=id ? clone(userById(id)) : {id:uid('u'),name:'',role:'',team:state.teams[0],market:state.markets[0].code,shift:'AM',status:'online',email:'',phone:'',bio:''};
-  openModal(`<div class="modal-head"><div class="modal-title">${id?'Edit profile':'Add user profile'}</div><button class="icon-btn" onclick="closeModal()">×</button></div><div class="modal-body"><div class="form-grid fg2"><div class="field"><label>Name</label><input id="u_name" value="${esc(u.name)}"></div><div class="field"><label>Role</label><input id="u_role" value="${esc(u.role)}"></div><div class="field"><label>Team</label><select id="u_team">${state.teams.map(t=>`<option value="${esc(t)}" ${u.team===t?'selected':''}>${esc(t)}</option>`).join('')}</select></div><div class="field"><label>Market</label><select id="u_market">${state.markets.map(m=>`<option value="${m.code}" ${u.market===m.code?'selected':''}>${esc(m.name)}</option>`).join('')}</select></div><div class="field"><label>Shift</label><input id="u_shift" value="${esc(u.shift)}"></div><div class="field"><label>Status</label><select id="u_status">${USER_STATUS.map(s=>`<option value="${s}" ${u.status===s?'selected':''}>${s}</option>`).join('')}</select></div><div class="field"><label>Email</label><input id="u_email" value="${esc(u.email)}"></div><div class="field"><label>Phone</label><input id="u_phone" value="${esc(u.phone)}"></div></div><div class="field" style="margin-top:13px"><label>Bio / scope</label><textarea id="u_bio">${esc(u.bio)}</textarea></div><div class="split" style="justify-content:flex-end;margin-top:16px">${id&&state.users.length>1?`<button class="btn danger" onclick="deleteUser('${u.id}')">Delete</button>`:''}<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="saveUser('${u.id}','${id?'edit':'new'}')">Save profile</button></div></div>`);
+  openModal(`<div class="modal-head"><div class="modal-title">${id?'Edit account':'Add user account'}</div><button class="icon-btn" onclick="closeModal()">×</button></div><div class="modal-body"><div class="form-grid fg2"><div class="field"><label>Name</label><input id="u_name" value="${esc(u.name)}"></div><div class="field"><label>Username</label><input id="u_username" value="${esc(u.username||'')}" autocomplete="off"></div><div class="field"><label>Password ${id?'(leave blank to keep)':''}</label><input id="u_password" type="password" autocomplete="new-password"></div><div class="field"><label>Access role</label><select id="u_access"><option value="user" ${(u.accessRole||'user')==='user'?'selected':''}>User</option><option value="admin" ${u.accessRole==='admin'?'selected':''}>Admin</option></select></div><div class="field"><label>Job role</label><input id="u_role" value="${esc(u.role)}"></div><div class="field"><label>Team</label><select id="u_team">${state.teams.map(t=>`<option value="${esc(t)}" ${u.team===t?'selected':''}>${esc(t)}</option>`).join('')}</select></div><div class="field"><label>Market</label><select id="u_market">${state.markets.map(m=>`<option value="${m.code}" ${u.market===m.code?'selected':''}>${esc(m.name)}</option>`).join('')}</select></div><div class="field"><label>Shift</label><input id="u_shift" value="${esc(u.shift)}"></div><div class="field"><label>Status</label><select id="u_status">${USER_STATUS.map(s=>`<option value="${s}" ${u.status===s?'selected':''}>${s}</option>`).join('')}</select></div><div class="field"><label>Email</label><input id="u_email" value="${esc(u.email)}"></div><div class="field"><label>Phone</label><input id="u_phone" value="${esc(u.phone)}"></div></div><div class="field" style="margin-top:13px"><label>Bio / scope</label><textarea id="u_bio">${esc(u.bio)}</textarea></div><div class="split" style="justify-content:flex-end;margin-top:16px">${id&&state.users.length>1?`<button class="btn danger" onclick="deleteUser('${u.id}')">Delete</button>`:''}<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="saveUser('${u.id}','${id?'edit':'new'}')">Save account</button></div></div>`);
 }
-function saveUser(id,mode){
-  const u={id,name:$('#u_name').value.trim(),role:$('#u_role').value.trim(),team:$('#u_team').value,market:$('#u_market').value,shift:$('#u_shift').value.trim(),status:$('#u_status').value,email:$('#u_email').value.trim(),phone:$('#u_phone').value.trim(),bio:$('#u_bio').value.trim()};
+async function saveUser(id,mode){
+  const u={id,name:$('#u_name').value.trim(),username:$('#u_username').value.trim(),password:$('#u_password').value,accessRole:$('#u_access').value,role:$('#u_role').value.trim(),team:$('#u_team').value,market:$('#u_market').value,shift:$('#u_shift').value.trim(),status:$('#u_status').value,email:$('#u_email').value.trim(),phone:$('#u_phone').value.trim(),bio:$('#u_bio').value.trim()};
   if(!u.name) return toast('Add a user name');
-  const idx=state.users.findIndex(x=>x.id===id); if(idx>=0) state.users[idx]=u; else state.users.push(u);
-  if(mode==='new') addActivity('◉','New profile connected',`${u.name} joined ${u.team} · ${u.market}.`,state.activeUserId);
-  saveState(); closeModal(); render(); toast('Profile saved');
+  if(!u.username) return toast('Add a username');
+  if(mode==='new' && !u.password) return toast('Add an initial password');
+  if(!u.password) delete u.password;
+  try{
+    await api('/api/admin/users',{method:mode==='new'?'POST':'PUT',body:JSON.stringify(u)});
+    await loadStateFromServer(previewUserId);
+    closeModal(); render(); toast('Account saved');
+  }catch(err){ toast(err.message || 'Account save failed'); }
 }
-function deleteUser(id){ if(id===state.activeUserId) return toast('Switch active profile before deleting it'); if(!confirm('Delete this user profile? Existing records become unassigned labels.')) return; state.users=state.users.filter(u=>u.id!==id); saveState(); closeModal(); render(); toast('Profile deleted'); }
+async function deleteUser(id){
+  if(id===state.sessionUserId) return toast('You cannot delete your own admin account');
+  if(!confirm('Delete this user account? Existing records keep the user id for audit history.')) return;
+  try{
+    await api('/api/admin/users',{method:'DELETE',body:JSON.stringify({id})});
+    if(previewUserId===id) previewUserId='';
+    await loadStateFromServer(previewUserId);
+    closeModal(); render(); toast('Account deleted');
+  }catch(err){ toast(err.message || 'Delete failed'); }
+}
 function openEscModal(id=''){
   const e=id?clone(state.escalations.find(x=>x.id===id)):{id:uid('esc'),title:'',severity:'Medium',market:activeUser().market,team:activeUser().team,owner:state.activeUserId,status:'open',raisedAt:new Date().toISOString(),raisedBy:state.activeUserId,nextAction:'',sourceHandoverId:''};
   openModal(`<div class="modal-head"><div class="modal-title">${id?'Edit escalation':'Log escalation'}</div><button class="icon-btn" onclick="closeModal()">×</button></div><div class="modal-body"><div class="form-grid fg2"><div class="field" style="grid-column:span 2"><label>Title</label><input id="e_title" value="${esc(e.title)}"></div><div class="field"><label>Severity</label><select id="e_sev">${['High','Medium','Low'].map(s=>`<option value="${s}" ${e.severity===s?'selected':''}>${s}</option>`).join('')}</select></div><div class="field"><label>Status</label><select id="e_status">${['open','in-progress','resolved'].map(s=>`<option value="${s}" ${e.status===s?'selected':''}>${s}</option>`).join('')}</select></div><div class="field"><label>Market</label><select id="e_market">${state.markets.map(m=>`<option value="${m.code}" ${e.market===m.code?'selected':''}>${esc(m.name)}</option>`).join('')}</select></div><div class="field"><label>Team</label><select id="e_team">${state.teams.map(t=>`<option value="${esc(t)}" ${e.team===t?'selected':''}>${esc(t)}</option>`).join('')}</select></div><div class="field"><label>Owner</label><select id="e_owner">${state.users.map(u=>`<option value="${u.id}" ${e.owner===u.id?'selected':''}>${esc(u.name)}</option>`).join('')}</select></div><div class="field"><label>Raised at</label><input type="datetime-local" id="e_raised" value="${toLocalDT(e.raisedAt)}"></div></div><div class="field" style="margin-top:13px"><label>Next action</label><textarea id="e_next">${esc(e.nextAction)}</textarea></div><div class="split" style="justify-content:flex-end;margin-top:16px"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="saveEsc('${e.id}','${id?'edit':'new'}')">Save escalation</button></div></div>`);
@@ -699,7 +785,22 @@ function downloadBlob(blob,name){ const a=document.createElement('a'); a.href=UR
 function importJSON(e){ const file=e.target.files[0]; if(!file) return; const reader=new FileReader(); reader.onload=()=>{ try{ const parsed=normalizeState(JSON.parse(reader.result)); if(confirm('Replace current local data with this backup?')){ state=parsed; saveState(); render(); toast('Backup imported'); } }catch(err){ alert('Invalid TryGC OS backup file.'); } e.target.value=''; }; reader.readAsText(file); }
 window.setRoute=setRoute; window.toggleTheme=()=>{ const root=document.documentElement; root.dataset.theme=root.dataset.theme==='dark'?'light':'dark'; localStorage.setItem('trygc_theme',root.dataset.theme); };
 window.switchUser=switchUser; window.openHandoverForm=openHandoverForm; window.openHandoverDetail=openHandoverDetail; window.closeDrawer=closeDrawer; window.addDraftTask=addDraftTask; window.removeDraftTask=removeDraftTask; window.addDraftBlocker=addDraftBlocker; window.removeDraftBlocker=removeDraftBlocker; window.saveHandover=saveHandover; window.deleteHandover=deleteHandover; window.ackHandover=ackHandover; window.closeHandover=closeHandover; window.openUserModal=openUserModal; window.saveUser=saveUser; window.deleteUser=deleteUser; window.openEscModal=openEscModal; window.saveEsc=saveEsc; window.resolveEsc=resolveEsc; window.closeModal=closeModal; window.markMyNotificationsRead=markMyNotificationsRead; window.clearFilters=clearFilters; window.exportJSON=exportJSON; window.exportCSV=exportCSV; window.importJSON=importJSON; window.saveSettings=saveSettings; window.resetDemo=resetDemo; window.addTeam=addTeam; window.addMarket=addMarket;
-(function boot(){ const theme=localStorage.getItem('trygc_theme'); if(theme) document.documentElement.dataset.theme=theme; render(); })();
+window.logout=logout;
+(async function boot(){
+  const theme=localStorage.getItem('trygc_theme');
+  if(theme) document.documentElement.dataset.theme=theme;
+  $('#loginForm').addEventListener('submit',login);
+  try{
+    const data = await api('/api/auth/session');
+    sessionUser=data.user;
+    await loadStateFromServer();
+    showApp();
+    render();
+  }catch{
+    $('#appShell').hidden=true;
+    $('#authScreen').hidden=false;
+  }
+})();
 </script>
 </body>
 </html>
